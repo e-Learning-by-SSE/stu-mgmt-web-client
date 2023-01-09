@@ -1,22 +1,21 @@
 pipeline {
-    agent any
-
-    tools {nodejs "NodeJS 16.13"}
+    agent {
+        docker {
+            image 'node:18-bullseye'
+            args '--tmpfs /.cache -v $HOME/.npm:/.npm'
+        }
+    }
     
     environment {
         DEMO_SERVER = '147.172.178.30'
         DEMO_SERVER_BACKEND_PORT = '3000'
+		DEMO_USER = 'jenkinsci'
         DEMO_SERVER_BACKEND_URL = "http://${env.DEMO_SERVER}:${env.DEMO_SERVER_BACKEND_PORT}"
+        AUTH_CLIENT_ID = 'stmgmt-client'
+        AUTH_ISSUER_URL = 'https://staging.sse.uni-hildesheim.de:8443/realms/test-ldap-realm/'
     }
     
     stages {
-
-        stage('Git') {
-            steps {
-                cleanWs()
-                git 'https://github.com/Student-Management-System/StudentMgmt-Client.git'
-            }
-        }
 
         stage('Install Dependencies') {
             steps {
@@ -38,32 +37,24 @@ pipeline {
                 sh 'tar czf Client.tar.gz dist/apps/client/'
             }
         }
-        
-        stage('Deploy') {
-            steps {
-                sshagent(credentials: ['Stu-Mgmt_Demo-System']) {
-                    sh """
-                        ssh -i ~/.ssh/id_rsa_student_mgmt_backend elscha@${env.DEMO_SERVER} <<EOF
-                            cd /var/www/html2/WEB-APP || exit 1
-                            rm -f -r *
-                            exit
-                        EOF
-                    """
-                    sh "scp -i ~/.ssh/id_rsa_student_mgmt_backend -r dist/apps/client/* elscha@${env.DEMO_SERVER}:/var/www/html2/WEB-APP"
-                    sh """
-                        ssh -i ~/.ssh/id_rsa_student_mgmt_backend elscha@${env.DEMO_SERVER} <<EOF
-                            sed -i "s|window\\.__env\\.API_BASE_PATH = .*|window\\.__env\\.API_BASE_PATH = \\"${env.DEMO_SERVER_BACKEND_URL}\\";|g" /var/www/html2/WEB-APP/env.js
-                            exit
-                        EOF
-                    """
-                }
-            }
-        }
-        
+
         stage('Publish Results') {
             steps {
                 archiveArtifacts artifacts: '*.tar.gz'
             }
         }
+
+        stage('Deploy') {
+            steps {
+                sh """sed -i "s|window\\.__env\\.API_BASE_PATH = .*|window\\.__env\\.API_BASE_PATH = \\"${env.DEMO_SERVER_BACKEND_URL}\\";|g" dist/apps/client/env.js"""
+                sh """sed -i "s|window\\.__env\\.AUTH_ISSUER_URL = .*|window\\.__env\\.AUTH_ISSUER_URL = \\"${env.AUTH_ISSUER_URL}\\";|g" dist/apps/client/env.js"""
+              	sh """sed -i "s|window\\.__env\\.AUTH_CLIENT_ID = .*|window\\.__env\\.AUTH_CLIENT_ID = \\"${env.AUTH_CLIENT_ID}\\";|g" dist/apps/client/env.js"""
+                sshagent(['STM-SSH-DEMO']) {
+					sh "ssh -o StrictHostKeyChecking=no -l ${env.DEMO_USER} ${env.DEMO_SERVER} rm -rf /var/www/html2/WEB-APP/*"
+                    sh "scp -pqr dist/apps/client/* ${env.DEMO_USER}@${env.DEMO_SERVER}:/var/www/html2/WEB-APP/"
+                }
+            }
+        }
+
     }
 }
